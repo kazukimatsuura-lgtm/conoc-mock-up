@@ -41,7 +41,7 @@ async function callGeminiText(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    console.error('Gemini API error:', errorData);
+    console.error('Gemini API error:', response.status, JSON.stringify(errorData).substring(0, 200));
     return { text: '', error: `Gemini API error: ${response.status}` };
   }
 
@@ -129,7 +129,38 @@ function deduplicateMaterials(
 }
 
 // ---------------------------------------------------------------------------
-// メインハンドラ — 2段階エージェントパイプライン（並列実行版）
+// バッチ実行（同時実行数を制限）
+// ---------------------------------------------------------------------------
+async function runInBatches<T>(
+  tasks: (() => Promise<T>)[],
+  batchSize: number,
+  delayMs: number
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fn => fn()));
+    results.push(...batchResults);
+    // 最終バッチ以外はレート制限回避のためにディレイ
+    if (i + batchSize < tasks.length) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// カテゴリID補足テキスト（全プロンプトに付加）
+// ---------------------------------------------------------------------------
+const CATEGORY_ID_HINT = `
+## 使用可能なcategory ID一覧（必ずこの中から選んでください）
+${MATERIAL_CATEGORIES.map(c => `- "${c.id}": ${c.label}`).join('\n')}
+
+category には上記のIDのみを使用し、日本語名やラベルは使わないでください。
+`;
+
+// ---------------------------------------------------------------------------
+// メインハンドラ — 2段階エージェントパイプライン（バッチ並列版）
 // ---------------------------------------------------------------------------
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
@@ -171,7 +202,7 @@ export async function POST(request: NextRequest) {
     }
 
     // =====================================================================
-    // 第1段階: 分類エージェント — どの分野の資材が含まれているか判定
+    // 第1段階: 分類エージェント
     // =====================================================================
     console.log('[material-import] Stage 1: Classifying data...');
 
@@ -198,24 +229,28 @@ export async function POST(request: NextRequest) {
       domains = Object.keys(DOMAIN_PROMPTS);
     }
 
-    // 有効なドメインのみフィルタ
     domains = domains.filter(d => DOMAIN_PROMPTS[d]);
 
-    // hardwareは常に含める（取りこぼし回収用）
     if (!domains.includes('hardware')) {
       domains.push('hardware');
     }
 
     // =====================================================================
-    // 第2段階: 各分野の専門エージェントを **並列** 実行
+    // 第2段階: バッチ並列実行（同時3リクエスト、バッチ間1秒ディレイ）
     // =====================================================================
-    console.log('[material-import] Stage 2: Running', domains.length, 'specialized agents in parallel:', domains);
+    console.log('[material-import] Stage 2: Running', domains.length, 'agents (batch=3):', domains);
 
-    const agentPromises = domains.map(async (domain) => {
+    interface AgentResult {
+      domain: string;
+      materials: ReturnType<typeof validateMaterial>[];
+      count: number;
+    }
+
+    const tasks = domains.map((domain) => async (): Promise<AgentResult> => {
       const specializedPrompt = DOMAIN_PROMPTS[domain];
       const label = DOMAIN_LABELS[domain] || domain;
 
-      const prompt = `${specializedPrompt}\n\n## 入力データ（${format}形式）\n${dataString}\n\n上記のデータから、あなたの担当分野の資材を全て抽出してJSON形式で出力してください。担当外の資材は無視してください。`;
+      const prompt = `${specializedPrompt}\n${CATEGORY_ID_HINT}\n\n## 入力データ（${format}形式）\n${dataString}\n\n上記のデータから、あなたの担当分野の資材を全て抽出してJSON形式で出力してください。担当外の資材は無視してください。`;
 
       const result = await callGeminiText(prompt, 8192);
 
@@ -229,24 +264,23 @@ export async function POST(request: NextRequest) {
         const materials = (parsed.materials || []).map((m: Record<string, unknown>) =>
           validateMaterial(m)
         );
-        console.log(`[material-import] ${label}: ${materials.length} materials extracted`);
+        console.log(`[material-import] ${label}: ${materials.length} materials`);
         return { domain, materials, count: materials.length };
       } catch (parseErr) {
-        console.error(`[material-import] ${label} agent parse error:`, parseErr);
+        console.error(`[material-import] ${label} parse error:`, parseErr);
         return { domain, materials: [], count: 0 };
       }
     });
 
-    // 全エージェントを並列で待機
-    const results = await Promise.allSettled(agentPromises);
+    const results = await runInBatches(tasks, 3, 1000);
 
     const allMaterials: ReturnType<typeof validateMaterial>[] = [];
     const domainResults: { domain: string; count: number }[] = [];
 
-    for (const result of results) {
-      if (result.status === 'fulfilled' && result.value.count > 0) {
-        allMaterials.push(...result.value.materials);
-        domainResults.push({ domain: result.value.domain, count: result.value.count });
+    for (const r of results) {
+      if (r.count > 0) {
+        allMaterials.push(...r.materials);
+        domainResults.push({ domain: r.domain, count: r.count });
       }
     }
 
