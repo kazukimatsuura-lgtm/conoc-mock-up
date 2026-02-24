@@ -7,6 +7,9 @@ import {
   DOMAIN_LABELS,
 } from '@/lib/material-prompts';
 
+// Vercel サーバーレス関数のタイムアウトを60秒に延長
+export const maxDuration = 60;
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = 'gemini-3-flash-preview';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
@@ -118,7 +121,6 @@ function deduplicateMaterials(
   for (const m of materials) {
     const key = `${m.name}||${m.productNumber}`.toLowerCase();
     const existing = seen.get(key);
-    // より高いconfidenceの方を採用
     if (!existing || m.confidence > existing.confidence) {
       seen.set(key, m);
     }
@@ -127,7 +129,7 @@ function deduplicateMaterials(
 }
 
 // ---------------------------------------------------------------------------
-// メインハンドラ — 2段階エージェントパイプライン
+// メインハンドラ — 2段階エージェントパイプライン（並列実行版）
 // ---------------------------------------------------------------------------
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
@@ -180,7 +182,6 @@ export async function POST(request: NextRequest) {
 
     if (classifyResult.error) {
       console.error('[material-import] Classification failed:', classifyResult.error);
-      // フォールバック: 全ドメインに投げる
       domains = Object.keys(DOMAIN_PROMPTS);
     } else {
       try {
@@ -193,7 +194,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ドメインが空 → 全ドメインで試行
     if (domains.length === 0) {
       domains = Object.keys(DOMAIN_PROMPTS);
     }
@@ -201,32 +201,27 @@ export async function POST(request: NextRequest) {
     // 有効なドメインのみフィルタ
     domains = domains.filter(d => DOMAIN_PROMPTS[d]);
 
-    // hardwareは常に含める（他エージェントが取りこぼした資材を拾うため）
+    // hardwareは常に含める（取りこぼし回収用）
     if (!domains.includes('hardware')) {
       domains.push('hardware');
     }
 
     // =====================================================================
-    // 第2段階: 各分野の専門エージェントに順次投入
+    // 第2段階: 各分野の専門エージェントを **並列** 実行
     // =====================================================================
-    console.log('[material-import] Stage 2: Running specialized agents for:', domains);
+    console.log('[material-import] Stage 2: Running', domains.length, 'specialized agents in parallel:', domains);
 
-    const allMaterials: ReturnType<typeof validateMaterial>[] = [];
-    const domainResults: { domain: string; count: number }[] = [];
-
-    for (const domain of domains) {
+    const agentPromises = domains.map(async (domain) => {
       const specializedPrompt = DOMAIN_PROMPTS[domain];
       const label = DOMAIN_LABELS[domain] || domain;
 
-      console.log(`[material-import] Running ${label} agent...`);
-
       const prompt = `${specializedPrompt}\n\n## 入力データ（${format}形式）\n${dataString}\n\n上記のデータから、あなたの担当分野の資材を全て抽出してJSON形式で出力してください。担当外の資材は無視してください。`;
 
-      const result = await callGeminiText(prompt, 16384);
+      const result = await callGeminiText(prompt, 8192);
 
       if (result.error) {
         console.error(`[material-import] ${label} agent error:`, result.error);
-        continue;
+        return { domain, materials: [], count: 0 };
       }
 
       try {
@@ -234,11 +229,24 @@ export async function POST(request: NextRequest) {
         const materials = (parsed.materials || []).map((m: Record<string, unknown>) =>
           validateMaterial(m)
         );
-        allMaterials.push(...materials);
-        domainResults.push({ domain, count: materials.length });
         console.log(`[material-import] ${label}: ${materials.length} materials extracted`);
+        return { domain, materials, count: materials.length };
       } catch (parseErr) {
         console.error(`[material-import] ${label} agent parse error:`, parseErr);
+        return { domain, materials: [], count: 0 };
+      }
+    });
+
+    // 全エージェントを並列で待機
+    const results = await Promise.allSettled(agentPromises);
+
+    const allMaterials: ReturnType<typeof validateMaterial>[] = [];
+    const domainResults: { domain: string; count: number }[] = [];
+
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value.count > 0) {
+        allMaterials.push(...result.value.materials);
+        domainResults.push({ domain: result.value.domain, count: result.value.count });
       }
     }
 
@@ -251,6 +259,8 @@ export async function POST(request: NextRequest) {
     const summaryParts = domainResults
       .filter(r => r.count > 0)
       .map(r => `${DOMAIN_LABELS[r.domain] || r.domain}: ${r.count}件`);
+
+    console.log(`[material-import] Done: ${deduplicated.length} materials in ${processingTime}ms`);
 
     return NextResponse.json({
       success: true,
