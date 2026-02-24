@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Plus, ChevronsDown, ChevronsUp, Trash2, GripVertical, AlertTriangle, List, Layers, Home, Package } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, ChevronsDown, ChevronsUp, Trash2, GripVertical, AlertTriangle, List, Layers, Home, Database } from 'lucide-react';
 import { useTakeoffStore } from '@/stores/takeoff-store';
 import { useGroupStore } from '@/stores/group-store';
 import { useCustomColumnStore } from '@/stores/custom-column-store';
@@ -86,6 +86,7 @@ const INDENT_PX = 40;
 
 // デフォルトカラム幅定義
 const DEFAULT_COL_WIDTHS: Record<string, number> = {
+  master: 90,
   check: 40,
   detail: 120,
   itemType: 200,
@@ -204,8 +205,8 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
     return { amount };
   }, [drawingItems]);
 
-  // 動的カラム数: 固定11 + customColumns + 1（＋ボタン）
-  const COL_COUNT = 11 + customColumns.length + 1;
+  // 動的カラム数: 固定12 (master+check+detail+itemType+spec+model+standard+qty+unit+price+amount+remarks) + customColumns + 1（＋ボタン）
+  const COL_COUNT = 12 + customColumns.length + 1;
 
   // ── 全体/明細モード ──
   const [listMode, setListMode] = useState<ListMode>('overview');
@@ -646,6 +647,7 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
       <div className="flex-1 overflow-auto">
         <table className="border-collapse" style={{ tableLayout: 'fixed', minWidth: 1200 }}>
           <colgroup>
+            <col style={{ width: getW('master') }} />
             <col style={{ width: getW('check') }} />
             <col style={{ width: getW('detail') }} />
             <col style={{ width: getW('itemType') }} />
@@ -662,6 +664,9 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
           </colgroup>
           <thead className="sticky top-0 z-10">
             <tr className="bg-[#0099CB] text-white text-xs">
+              <th className="px-1 py-2 text-center whitespace-nowrap" style={{ width: getW('master') }}>
+                マスタ
+              </th>
               <ResizableTh colKey="check" getW={getW} onResizeStart={onResizeStart} align="center">
                 <input
                   type="checkbox"
@@ -821,6 +826,7 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
           <tfoot>
             <tr className="bg-[#0099CB] text-white text-sm font-bold">
               <td className="px-1 py-2.5" />
+              <td className="px-1 py-2.5" />
               <td className="px-2 py-2.5" />
               <td className="px-2 py-2.5">
                 {listMode === 'detail' && focusedGroupId ? '小計' : '合計'}
@@ -958,6 +964,9 @@ function GroupRow({
         onDragLeave={isDragging ? () => { onDragLeaveGroup(); onRowDragLeave(); } : undefined}
         onDrop={isDragging ? (e) => onRowDrop(e, group.id, 'group', group.parentId ?? undefined) : undefined}
       >
+        {/* マスタ参照（グループは空） */}
+        <td className="px-1 py-1.5 border-r border-gray-100" />
+
         {/* Checkbox */}
         <td className="py-1.5 text-center border-r border-gray-100" style={{ paddingLeft: depth * INDENT_PX + 4, paddingRight: 4 }}>
           <input
@@ -1172,6 +1181,18 @@ function ItemRow({ item, depth, selected, onToggleSelection, onUpdate, onDelete,
       onDragLeave={onRowDragLeave}
       onDrop={(e) => onRowDrop(e, item.id, 'item', item.groupId)}
     >
+      {/* マスタ参照ボタン */}
+      <td className="px-1 py-1.5 border-r border-gray-100 text-center">
+        <button
+          onClick={() => onOpenMaterialPicker(item.id)}
+          className="inline-flex items-center gap-0.5 px-1.5 py-1 text-[10px] font-medium text-white bg-[#0099CB] hover:bg-[#0088B4] rounded transition-colors whitespace-nowrap"
+          title="部材マスタから選択"
+        >
+          <Database size={10} />
+          マスタ参照
+        </button>
+      </td>
+
       {/* Checkbox + drag handle */}
       <td className="py-1.5 text-center border-r border-gray-100" style={{ paddingLeft: depth * INDENT_PX + 4, paddingRight: 4 }}>
         <div className="flex items-center justify-center gap-0.5">
@@ -1201,13 +1222,6 @@ function ItemRow({ item, depth, selected, onToggleSelection, onUpdate, onDelete,
             onBlur={(e) => onUpdate(item.id, { itemType: e.target.value })}
             className="w-full text-sm text-gray-800 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-[#0099CB] outline-none"
           />
-          <button
-            onClick={() => onOpenMaterialPicker(item.id)}
-            className="p-0.5 text-gray-300 hover:text-[#0099CB] hover:bg-[#E0F4FA] rounded transition-all flex-shrink-0"
-            title="マスタから選択"
-          >
-            <Package size={12} />
-          </button>
           <button
             onClick={() => onRequestConfirm(`「${item.itemType}」を削除しますか？`, () => onDelete(item.id))}
             className="opacity-0 group-hover/item:opacity-100 p-0.5 text-gray-400 hover:text-red-500 transition-all flex-shrink-0"

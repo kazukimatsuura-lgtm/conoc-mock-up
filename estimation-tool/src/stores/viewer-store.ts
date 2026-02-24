@@ -23,6 +23,10 @@ interface ViewerState {
   panOffset: Point;
   setPanOffset: (offset: Point) => void;
 
+  // View initialization tracking (prevents reset on mode switch)
+  viewInitializedDrawingId: string | null;
+  setViewInitializedDrawingId: (id: string | null) => void;
+
   // Drawing state (for tools in progress)
   isDrawing: boolean;
   setIsDrawing: (drawing: boolean) => void;
@@ -59,9 +63,13 @@ export const useViewerStore = create<ViewerState>((set) => ({
 
   // Zoom & Pan
   zoomLevel: 50,
-  setZoomLevel: (level) => set({ zoomLevel: Math.min(200, Math.max(25, level)) }),
+  setZoomLevel: (level) => set({ zoomLevel: Math.min(200, Math.max(10, level)) }),
   panOffset: { x: 0, y: 0 },
   setPanOffset: (offset) => set({ panOffset: offset }),
+
+  // View initialization tracking
+  viewInitializedDrawingId: null,
+  setViewInitializedDrawingId: (id) => set({ viewInitializedDrawingId: id }),
 
   // Drawing state
   isDrawing: false,
@@ -93,5 +101,6 @@ export const useViewerStore = create<ViewerState>((set) => ({
     isDrawing: false,
     drawingPoints: [],
     mousePosition: { x: 0, y: 0 },
+    viewInitializedDrawingId: null,
   }),
 }));

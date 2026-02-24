@@ -51,6 +51,8 @@ export function DrawingCanvas({ drawing, aiOverlay, highlightItems, onScaleLineC
     showGrid,
     currentCategory,
     currentItemType,
+    viewInitializedDrawingId,
+    setViewInitializedDrawingId,
   } = useViewerStore();
 
   const { items, addPointItem, addLineItem, addAreaItem, addRectItem } = useTakeoffStore();
@@ -66,30 +68,29 @@ export function DrawingCanvas({ drawing, aiOverlay, highlightItems, onScaleLineC
     }
   }, [drawing?.imageData]);
 
-  // Fit the drawing to the viewport initially
+  // Fit the drawing to the viewport on first load (skip if returning from table mode)
   useEffect(() => {
     if (containerRef.current && imageSize.width > 0 && drawing) {
+      // Already initialized for this drawing — preserve user's pan/zoom
+      if (viewInitializedDrawingId === drawing.id) return;
+
       const container = containerRef.current;
       const containerWidth = container.clientWidth;
       const containerHeight = container.clientHeight;
 
-      // Calculate scale to fit the entire image in the viewport
-      const scaleX = containerWidth / imageSize.width;
-      const scaleY = containerHeight / imageSize.height;
-      const fitScale = Math.min(scaleX, scaleY) * 0.9; // 90% to leave some margin
-
-      // Clamp and set zoom level
-      const fitZoom = Math.max(25, Math.min(Math.round(fitScale * 100), 200));
+      // Fit to width, position at top
+      const fitScale = (containerWidth / imageSize.width) * 0.95;
+      const fitZoom = Math.max(10, Math.min(Math.round(fitScale * 100), 200));
       const actualScale = fitZoom / 100;
       setZoomLevel(fitZoom);
 
-      // Center the image at the fit scale
       const scaledWidth = imageSize.width * actualScale;
-      const scaledHeight = imageSize.height * actualScale;
       setPanOffset({
         x: (containerWidth - scaledWidth) / 2,
-        y: (containerHeight - scaledHeight) / 2,
+        y: 10,  // top-aligned with small padding
       });
+
+      setViewInitializedDrawingId(drawing.id);
     }
   }, [imageSize, drawing?.id]);
 
