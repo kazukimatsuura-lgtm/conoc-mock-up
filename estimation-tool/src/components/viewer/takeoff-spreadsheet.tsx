@@ -261,15 +261,19 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
 
   const handleMaterialSelect = useCallback(async (material: Material) => {
     if (!materialPickerTargetId) return;
+    const targetItem = drawingItems.find(i => i.id === materialPickerTargetId);
+    const quantity = targetItem?.quantity || 0;
+    const unitPrice = material.unitPrice || 0;
     await updateItem(materialPickerTargetId, {
       itemType: material.name,
       specification: material.specifications || undefined,
       modelNumber: material.productNumber || undefined,
       unit: material.unit,
-      unitPrice: material.unitPrice || 0,
+      unitPrice,
+      amount: quantity * unitPrice,
     });
     setMaterialPickerTargetId(null);
-  }, [materialPickerTargetId, updateItem]);
+  }, [materialPickerTargetId, updateItem, drawingItems]);
 
   // ── グループ選択 state ──
   const [checkedGroupIds, setCheckedGroupIds] = useState<Set<string>>(new Set());
@@ -1199,7 +1203,7 @@ function ItemRow({ item, depth, selected, onToggleSelection, onUpdate, onDelete,
           />
           <button
             onClick={() => onOpenMaterialPicker(item.id)}
-            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-gray-400 hover:text-[#0099CB] transition-all flex-shrink-0"
+            className="p-0.5 text-gray-300 hover:text-[#0099CB] hover:bg-[#E0F4FA] rounded transition-all flex-shrink-0"
             title="マスタから選択"
           >
             <Package size={12} />

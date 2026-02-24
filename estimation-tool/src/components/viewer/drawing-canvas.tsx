@@ -66,17 +66,29 @@ export function DrawingCanvas({ drawing, aiOverlay, highlightItems, onScaleLineC
     }
   }, [drawing?.imageData]);
 
-  // Center the drawing initially
+  // Fit the drawing to the viewport initially
   useEffect(() => {
     if (containerRef.current && imageSize.width > 0 && drawing) {
       const container = containerRef.current;
-      const scale = zoomLevel / 100;
-      const scaledWidth = imageSize.width * scale;
-      const scaledHeight = imageSize.height * scale;
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
 
+      // Calculate scale to fit the entire image in the viewport
+      const scaleX = containerWidth / imageSize.width;
+      const scaleY = containerHeight / imageSize.height;
+      const fitScale = Math.min(scaleX, scaleY) * 0.9; // 90% to leave some margin
+
+      // Clamp and set zoom level
+      const fitZoom = Math.max(25, Math.min(Math.round(fitScale * 100), 200));
+      const actualScale = fitZoom / 100;
+      setZoomLevel(fitZoom);
+
+      // Center the image at the fit scale
+      const scaledWidth = imageSize.width * actualScale;
+      const scaledHeight = imageSize.height * actualScale;
       setPanOffset({
-        x: (container.clientWidth - scaledWidth) / 2,
-        y: (container.clientHeight - scaledHeight) / 2,
+        x: (containerWidth - scaledWidth) / 2,
+        y: (containerHeight - scaledHeight) / 2,
       });
     }
   }, [imageSize, drawing?.id]);
