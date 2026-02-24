@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Plus, ChevronsDown, ChevronsUp, Trash2, GripVertical, AlertTriangle, List, Layers, Home } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, ChevronsDown, ChevronsUp, Trash2, GripVertical, AlertTriangle, List, Layers, Home, Package } from 'lucide-react';
 import { useTakeoffStore } from '@/stores/takeoff-store';
 import { useGroupStore } from '@/stores/group-store';
 import { useCustomColumnStore } from '@/stores/custom-column-store';
 import type { TakeoffItem, TakeoffGroup, CustomColumn } from '@/types';
+import type { Material } from '@/types/material';
 import { TAKEOFF_UNITS } from '@/types/takeoff';
 import { cn } from '@/lib/utils';
+import { MaterialPicker } from './material-picker';
 
 // ========== 確認モーダル ==========
 function ConfirmDeleteModal({
@@ -249,6 +251,25 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
   const handleNavigateInto = useCallback((groupId: string) => {
     setFocusedGroupId(groupId);
   }, []);
+
+  // ── マスタ選択 state ──
+  const [materialPickerTargetId, setMaterialPickerTargetId] = useState<string | null>(null);
+
+  const handleOpenMaterialPicker = useCallback((itemId: string) => {
+    setMaterialPickerTargetId(itemId);
+  }, []);
+
+  const handleMaterialSelect = useCallback(async (material: Material) => {
+    if (!materialPickerTargetId) return;
+    await updateItem(materialPickerTargetId, {
+      itemType: material.name,
+      specification: material.specifications || undefined,
+      modelNumber: material.productNumber || undefined,
+      unit: material.unit,
+      unitPrice: material.unitPrice || 0,
+    });
+    setMaterialPickerTargetId(null);
+  }, [materialPickerTargetId, updateItem]);
 
   // ── グループ選択 state ──
   const [checkedGroupIds, setCheckedGroupIds] = useState<Set<string>>(new Set());
@@ -498,6 +519,7 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
     onRowDragLeave: handleRowDragLeave,
     onRowDrop: handleRowDrop,
     getW,
+    onOpenMaterialPicker: handleOpenMaterialPicker,
   };
 
   const displayTotals = listMode === 'detail' ? detailTotals : totals;
@@ -510,6 +532,13 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
         message={confirmModal?.message || ''}
         onConfirm={() => { confirmModal?.onConfirm(); setConfirmModal(null); }}
         onCancel={() => setConfirmModal(null)}
+      />
+
+      {/* マスタ選択モーダル */}
+      <MaterialPicker
+        isOpen={!!materialPickerTargetId}
+        onClose={() => setMaterialPickerTargetId(null)}
+        onSelect={handleMaterialSelect}
       />
 
       {/* Toolbar */}
@@ -724,6 +753,7 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
                     onRowDragOver={handleRowDragOver}
                     onRowDragLeave={handleRowDragLeave}
                     onRowDrop={handleRowDrop}
+                    onOpenMaterialPicker={handleOpenMaterialPicker}
                   />
                 ))}
               </>
@@ -770,6 +800,7 @@ export function TakeoffSpreadsheet({ drawingId }: TakeoffSpreadsheetProps) {
                     onRowDragOver={handleRowDragOver}
                     onRowDragLeave={handleRowDragLeave}
                     onRowDrop={handleRowDrop}
+                    onOpenMaterialPicker={handleOpenMaterialPicker}
                   />
                 ))}
                 {detailGroups.length === 0 && detailItems.length === 0 && (
@@ -842,6 +873,7 @@ interface GroupRowProps {
   onRowDragLeave: () => void;
   onRowDrop: (e: React.DragEvent, targetId: string, targetType: 'item' | 'group', parentGroupId: string | undefined) => Promise<void>;
   getW: (key: string) => number;
+  onOpenMaterialPicker: (itemId: string) => void;
 }
 
 function GroupRow({
@@ -877,6 +909,7 @@ function GroupRow({
   onRowDragLeave,
   onRowDrop,
   getW,
+  onOpenMaterialPicker,
 }: GroupRowProps) {
   const isExpanded = expandedGroupIds.has(group.id);
   const childGroups = allGroups.filter(g => g.parentId === group.id).sort((a, b) => a.order - b.order);
@@ -1055,6 +1088,7 @@ function GroupRow({
               onRowDragLeave={onRowDragLeave}
               onRowDrop={onRowDrop}
               getW={getW}
+              onOpenMaterialPicker={onOpenMaterialPicker}
             />
           ))}
           {directItems.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((item) => (
@@ -1076,6 +1110,7 @@ function GroupRow({
               onRowDragOver={onRowDragOver}
               onRowDragLeave={onRowDragLeave}
               onRowDrop={onRowDrop}
+              onOpenMaterialPicker={onOpenMaterialPicker}
             />
           ))}
         </>
@@ -1102,9 +1137,10 @@ interface ItemRowProps {
   onRowDragOver: (e: React.DragEvent, targetId: string, targetType: 'item' | 'group') => void;
   onRowDragLeave: () => void;
   onRowDrop: (e: React.DragEvent, targetId: string, targetType: 'item' | 'group', parentGroupId: string | undefined) => Promise<void>;
+  onOpenMaterialPicker: (itemId: string) => void;
 }
 
-function ItemRow({ item, depth, selected, onToggleSelection, onUpdate, onDelete, onDragStart, onDragEnd, drawingId, onAddGroup, onRequestConfirm, customColumns, dropTarget, onRowDragOver, onRowDragLeave, onRowDrop }: ItemRowProps) {
+function ItemRow({ item, depth, selected, onToggleSelection, onUpdate, onDelete, onDragStart, onDragEnd, drawingId, onAddGroup, onRequestConfirm, customColumns, dropTarget, onRowDragOver, onRowDragLeave, onRowDrop, onOpenMaterialPicker }: ItemRowProps) {
   const handleConvertToGroup = useCallback(async () => {
     if (!drawingId) return;
     const parentId = item.groupId || null;
@@ -1161,6 +1197,13 @@ function ItemRow({ item, depth, selected, onToggleSelection, onUpdate, onDelete,
             onBlur={(e) => onUpdate(item.id, { itemType: e.target.value })}
             className="w-full text-sm text-gray-800 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-[#0099CB] outline-none"
           />
+          <button
+            onClick={() => onOpenMaterialPicker(item.id)}
+            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-gray-400 hover:text-[#0099CB] transition-all flex-shrink-0"
+            title="マスタから選択"
+          >
+            <Package size={12} />
+          </button>
           <button
             onClick={() => onRequestConfirm(`「${item.itemType}」を削除しますか？`, () => onDelete(item.id))}
             className="opacity-0 group-hover/item:opacity-100 p-0.5 text-gray-400 hover:text-red-500 transition-all flex-shrink-0"
